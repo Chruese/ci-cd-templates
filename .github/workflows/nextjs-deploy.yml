@@ -15,6 +15,10 @@ on:
         description: "Target environment: 'vm' or 'azure'"
         type: string
         default: "vm"
+      vm-target-path:
+        description: "Destination path on the Linux VM"
+        type: string
+        default: "/var/www/nextjs-app"
     secrets:
       # Required for Linux VM deployments
       SSH_HOST:
@@ -32,10 +36,6 @@ on:
         required: false
       AZURE_WEBAPP_NAME:
         required: false
-      vm-target-path:
-        description: "Destination path on the Linux VM"
-        type: string
-        default: "/var/www/nextjs-app"
 
 jobs:
   build:
@@ -55,7 +55,6 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: 'npm'
 
-      # Crucial for Next.js build speed
       - name: Cache Next.js build
         uses: actions/cache@v4
         with:
@@ -81,7 +80,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nextjs-build
-          # Uploads standalone build output, public assets, and config
           path: |
             ${{ inputs.working-dir }}/.next
             ${{ inputs.working-dir }}/public
@@ -103,27 +101,39 @@ jobs:
           name: nextjs-build
           path: ./app-deploy
 
-      - name: Transfer Files to VM via SCP
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "./app-deploy/*"
-          target: "${{ inputs.vm-target-path }}"
-          strip_components: 1
+      - name: Configure Native SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # Write SSH key from secrets and secure it
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Add host to known_hosts to bypass interactive prompts
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Restart Application Service via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd ${{ inputs.vm-target-path }} # Dynamischer Pfad
+      - name: Transfer Files to VM (Native rsync)
+        run: |
+          # rsync is more secure/efficient than scp and transfers hidden files (.next) reliably
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./app-deploy/ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ inputs.vm-target-path }}/
+
+      - name: Restart Application Service (Native SSH)
+        run: |
+          # Execute commands natively via SSH tunnel
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+            cd ${{ inputs.vm-target-path }}
             npm ci --omit=dev
             pm2 reload ecosystem.config.js || pm2 start ecosystem.config.js
             pm2 save
+          EOF
+
+      - name: Security Cleanup
+        if: always()
+        run: |
+          # Ensure the key is deleted even if the workflow fails
+          rm -f ~/.ssh/deploy_key
 
   deploy-azure:
     name: Deploy to Azure Web App
