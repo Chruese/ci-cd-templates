@@ -79,3 +79,22 @@ jobs:
     secrets:
       INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
 ```
+
+Markdown
+### 6. `nextjs-deploy.yml`
+**Use case:** Next.js Web Applications
+A unified CI/CD workflow tailored for Next.js applications using React, TypeScript, and Tailwind CSS. It features Next.js build caching, strict type checking, and can dynamically deploy the application to either a Linux VM (via SSH/SCP) or an Azure Web App (via OIDC).
+
+**Example: Deploying to a Linux VM**
+```yaml
+jobs:
+  deploy-web:
+    uses: YourOrg/ci-cd-templates/.github/workflows/nextjs-deploy.yml@main
+    with:
+      working-dir: "."
+      node-version: "20.x"
+      deploy-target: "vm"
+    secrets:
+      SSH_HOST: ${{ secrets.VM_HOST }}
+      SSH_USER: ${{ secrets.VM_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_KEY }}

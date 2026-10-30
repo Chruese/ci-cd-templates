@@ -1,0 +1,150 @@
+name: Next.js Universal Deploy
+
+on:
+  workflow_call:
+    inputs:
+      working-dir:
+        description: "Directory containing the Next.js app"
+        type: string
+        default: "."
+      node-version:
+        description: "Node.js version to use"
+        type: string
+        default: "20.x"
+      deploy-target:
+        description: "Target environment: 'vm' or 'azure'"
+        type: string
+        default: "vm"
+    secrets:
+      # Required for Linux VM deployments
+      SSH_HOST:
+        required: false
+      SSH_USER:
+        required: false
+      SSH_PRIVATE_KEY:
+        required: false
+      # Required for Azure deployments
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+      AZURE_WEBAPP_NAME:
+        required: false
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-dir }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      # Crucial for Next.js build speed
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: ${{ inputs.working-dir }}/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**.[jt]s', '**.[jt]sx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Linter
+        run: npm run lint --if-present
+
+      - name: Type Check (TypeScript)
+        run: npx tsc --noEmit
+        if: hashFiles('**/tsconfig.json') != ''
+
+      - name: Build Next.js App
+        run: npm run build
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-build
+          # Uploads standalone build output, public assets, and config
+          path: |
+            ${{ inputs.working-dir }}/.next
+            ${{ inputs.working-dir }}/public
+            ${{ inputs.working-dir }}/package.json
+            ${{ inputs.working-dir }}/package-lock.json
+            ${{ inputs.working-dir }}/next.config.*
+
+  deploy-vm:
+    name: Deploy to Linux VM
+    needs: build
+    if: inputs.deploy-target == 'vm'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nextjs-build
+          path: ./app-deploy
+
+      - name: Transfer Files to VM via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "./app-deploy/*"
+          target: "/var/www/nextjs-app" # Adjust destination path
+          strip_components: 1
+
+      - name: Restart Application Service via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          # Example using PM2 process manager
+          script: |
+            cd /var/www/nextjs-app
+            npm install --production
+            pm2 restart nextjs-app || pm2 start npm --name "nextjs-app" -- start
+
+  deploy-azure:
+    name: Deploy to Azure Web App
+    needs: build
+    if: inputs.deploy-target == 'azure'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nextjs-build
+          path: ./app-deploy
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          package: ./app-deploy
