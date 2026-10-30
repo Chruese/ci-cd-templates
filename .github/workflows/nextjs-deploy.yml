@@ -32,6 +32,10 @@ on:
         required: false
       AZURE_WEBAPP_NAME:
         required: false
+      vm-target-path:
+        description: "Destination path on the Linux VM"
+        type: string
+        default: "/var/www/nextjs-app"
 
 jobs:
   build:
@@ -84,6 +88,7 @@ jobs:
             ${{ inputs.working-dir }}/package.json
             ${{ inputs.working-dir }}/package-lock.json
             ${{ inputs.working-dir }}/next.config.*
+            ${{ inputs.working-dir }}/ecosystem.config.js
 
   deploy-vm:
     name: Deploy to Linux VM
@@ -105,7 +110,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: "./app-deploy/*"
-          target: "/var/www/nextjs-app" # Adjust destination path
+          target: "${{ inputs.vm-target-path }}"
           strip_components: 1
 
       - name: Restart Application Service via SSH
@@ -114,11 +119,11 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          # Example using PM2 process manager
           script: |
-            cd /var/www/nextjs-app
-            npm install --production
-            pm2 restart nextjs-app || pm2 start npm --name "nextjs-app" -- start
+            cd ${{ inputs.vm-target-path }} # Dynamischer Pfad
+            npm ci --omit=dev
+            pm2 reload ecosystem.config.js || pm2 start ecosystem.config.js
+            pm2 save
 
   deploy-azure:
     name: Deploy to Azure Web App
