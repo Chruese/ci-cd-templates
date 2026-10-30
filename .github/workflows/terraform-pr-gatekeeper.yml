@@ -11,22 +11,44 @@ on:
         description: "Terraform version to use"
         type: string
         default: "1.8.0"
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
 
 jobs:
   gatekeeper:
     name: Security Scan & Plan
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: write # Required to post PR comments
+      id-token: write        # Required for Azure OIDC login
+      contents: read         # Required to checkout code
+      pull-requests: write   # Required to post PR comments
 
     defaults:
       run:
         working-directory: ${{ inputs.working-dir }}
 
+    # Set environment variables for the Terraform AzureRM Provider (OIDC Auth)
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: "true"
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -35,7 +57,7 @@ jobs:
 
       - name: Terraform Init
         id: init
-        run: terraform init -backend=false
+        run: terraform init
 
       - name: Terraform Format
         id: fmt
@@ -45,21 +67,22 @@ jobs:
         id: validate
         run: terraform validate
 
-      # Trivy IaC Scanner for Terraform
       - name: Run Trivy vulnerability scanner in IaC mode
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
           hide-progress: false
           format: 'table'
-          exit-code: '1' # Fails the build if critical issues are found
+          exit-code: '1'
           severity: 'CRITICAL,HIGH'
 
-      # Fake plan for demonstration (in a real scenario, you'd need Azure credentials here)
+      # Execute a real plan against the cloud infrastructure
       - name: Terraform Plan
         id: plan
         run: |
           terraform plan -no-color -out=tfplan > plan_output.txt
+          
+          # GitHub Actions multiline output for the PR comment
           echo "plan_summary<<EOF" >> $GITHUB_OUTPUT
           cat plan_output.txt
           echo "EOF" >> $GITHUB_OUTPUT
