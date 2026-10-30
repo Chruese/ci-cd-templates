@@ -51,7 +51,8 @@ jobs:
 
       - name: Install Tool Dependencies
         run: |
-          pip install -r pipeline-tools/requirements.txt
+          pip install -r pipeline-tools/tools/ipam-checker/requirements.txt
+          pip install -r pipeline-tools/tools/dns-record-validator/requirements.txt
 
       - name: Run IPAM YAML Validator
         env:
@@ -61,9 +62,9 @@ jobs:
           IPAM_USER: ${{ secrets.IPAM_USER }}
           IPAM_PASSWORD: ${{ secrets.IPAM_PASSWORD }}
         run: |
-          python pipeline-tools/ipam_checker.py -f infra-repo/${{ inputs.rules-filepath }}
+          python pipeline-tools/tools/ipam-checker/ipam_checker.py -f infra-repo/${{ inputs.rules-filepath }}
 
       # Verify that the YAML contains valid and resolvable DNS names
       - name: Run DNS Record Validator
         run: |
-          python pipeline-tools/dns_validator.py -f infra-repo/${{ inputs.rules-filepath }}
+          python pipeline-tools/tools/dns-record-validator/dns_validator.py -f infra-repo/${{ inputs.rules-filepath }}
