@@ -84,9 +84,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nextjs-build
+          include-hidden-files: true
+          if-no-files-found: error
           path: |
-            ${{ inputs.working-dir }}/.next
-            ${{ inputs.working-dir }}/public
+            ${{ inputs.working-dir }}/.next/
+            ${{ inputs.working-dir }}/public/
             ${{ inputs.working-dir }}/package.json
             ${{ inputs.working-dir }}/package-lock.json
             ${{ inputs.working-dir }}/next.config.*
