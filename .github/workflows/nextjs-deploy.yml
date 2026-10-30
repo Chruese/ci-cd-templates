@@ -127,6 +127,15 @@ jobs:
         run: |
           # Execute commands natively via SSH tunnel
           ssh -i ~/.ssh/deploy_key ${{ inputs.SSH_USER }}@${{ inputs.SSH_HOST }} << 'EOF'
+            # 1. Standard-Profile laden
+            source ~/.bashrc 2>/dev/null || true
+            source ~/.profile 2>/dev/null || true
+            
+            # 2. NVM (Node Version Manager) explizit laden (CloudPanel Standard)
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+            # 3. Eigentliches Deployment
             cd ${{ inputs.vm-target-path }}
             npm ci --omit=dev
             pm2 reload ecosystem.config.js || pm2 start ecosystem.config.js
