@@ -19,12 +19,16 @@ on:
         description: "Destination path on the Linux VM"
         type: string
         default: "/var/www/nextjs-app"
-    secrets:
-      # Required for Linux VM deployments
       SSH_HOST:
+        description: "Host domain or IP for VM deployment"
+        type: string
         required: false
       SSH_USER:
+        description: "SSH Username for VM deployment"
+        type: string
         required: false
+    secrets:
+      # Required for Linux VM deployments
       SSH_PRIVATE_KEY:
         required: false
       # Required for Azure deployments
@@ -109,7 +113,7 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           # Add host to known_hosts to bypass interactive prompts
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ inputs.SSH_HOST }} >> ~/.ssh/known_hosts
 
       - name: Transfer Files to VM (Native rsync)
         run: |
@@ -117,12 +121,12 @@ jobs:
           rsync -avz --delete \
             -e "ssh -i ~/.ssh/deploy_key" \
             ./app-deploy/ \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ inputs.vm-target-path }}/
+            ${{ inputs.SSH_USER }}@${{ inputs.SSH_HOST }}:${{ inputs.vm-target-path }}/
 
       - name: Restart Application Service (Native SSH)
         run: |
           # Execute commands natively via SSH tunnel
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+          ssh -i ~/.ssh/deploy_key ${{ inputs.SSH_USER }}@${{ inputs.SSH_HOST }} << 'EOF'
             cd ${{ inputs.vm-target-path }}
             npm ci --omit=dev
             pm2 reload ecosystem.config.js || pm2 start ecosystem.config.js
