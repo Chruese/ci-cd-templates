@@ -1,0 +1,69 @@
+name: Firewall Policy Validator
+
+on:
+  workflow_call:
+    inputs:
+      rules-filepath:
+        description: "Path to the YAML file containing the firewall/DNS rules"
+        type: string
+        required: true
+      ipam-provider:
+        description: "IPAM Provider to use (netbox or efficientip)"
+        type: string
+        default: "netbox"
+    secrets:
+      IPAM_URL:
+        required: true
+      IPAM_TOKEN:
+        required: false # Used for NetBox
+      IPAM_USER:
+        required: false # Used for EfficientIP
+      IPAM_PASSWORD:
+        required: false # Used for EfficientIP
+      PIPELINE_TOOLS_TOKEN:
+        description: "PAT to checkout the private pipeline-tools repository"
+        required: true
+
+jobs:
+  validate-network-rules:
+    name: Validate IPAM & DNS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Infrastructure Repository
+        uses: actions/checkout@v4
+        with:
+          path: infra-repo
+
+      # Check out custom Python tools from the separate pipeline-tools repository
+      - name: Checkout Pipeline Tools
+        uses: actions/checkout@v4
+        with:
+          repository: "Chruese/pipeline-tools"
+          token: ${{ secrets.PIPELINE_TOOLS_TOKEN }}
+          path: pipeline-tools
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Tool Dependencies
+        run: |
+          pip install -r pipeline-tools/requirements.txt
+
+      - name: Run IPAM YAML Validator
+        env:
+          IPAM_PROVIDER: ${{ inputs.ipam-provider }}
+          IPAM_URL: ${{ secrets.IPAM_URL }}
+          IPAM_TOKEN: ${{ secrets.IPAM_TOKEN }}
+          IPAM_USER: ${{ secrets.IPAM_USER }}
+          IPAM_PASSWORD: ${{ secrets.IPAM_PASSWORD }}
+        run: |
+          python pipeline-tools/ipam_checker.py -f infra-repo/${{ inputs.rules-filepath }}
+
+      # Verify that the YAML contains valid and resolvable DNS names
+      - name: Run DNS Record Validator
+        run: |
+          python pipeline-tools/dns_validator.py -f infra-repo/${{ inputs.rules-filepath }}

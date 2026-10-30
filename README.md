@@ -47,3 +47,35 @@ jobs:
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 ```
+
+### 4. `firewall-policy-validator.yml`
+**Use case:** Network Security & GitOps (Pre-Flight Checks)
+Pulls our custom Python `pipeline-tools` to validate declarative YAML firewall and DNS rules against our IPAM (NetBox/EfficientIP) and live DNS resolvers before Terraform is even triggered. Fails fast if IPs are unregistered or DNS is unresolvable.
+
+```yaml
+jobs:
+  validate-yaml:
+    uses: YourOrg/ci-cd-templates/.github/workflows/firewall-policy-validator.yml@main
+    with:
+      rules-filepath: "firewall/azure-hub-rules.yaml"
+      ipam-provider: "efficientip"
+    secrets:
+      IPAM_URL: ${{ secrets.IPAM_URL }}
+      IPAM_USER: ${{ secrets.IPAM_USER }}
+      IPAM_PASSWORD: ${{ secrets.IPAM_PASSWORD }}
+      PIPELINE_TOOLS_TOKEN: ${{ secrets.PAT_TOKEN }}
+```
+
+### 5. `terraform-finops-pr-commenter.yml`
+**Use case:** FinOps & Cost Transparency
+Integrates Infracost to calculate the expected monthly Azure costs for the proposed infrastructure changes. Posts a clear cost breakdown directly into the Pull Request so reviewers can catch expensive misconfigurations prior to merging.
+
+```yaml
+jobs:
+  finops:
+    uses: YourOrg/ci-cd-templates/.github/workflows/terraform-finops-pr-commenter.yml@main
+    with:
+      working-dir: "src/azure-firewall"
+    secrets:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+```
