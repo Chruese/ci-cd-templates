@@ -1,0 +1,94 @@
+name: Terraform PR Gatekeeper
+
+on:
+  workflow_call:
+    inputs:
+      working-dir:
+        description: "Directory containing the Terraform code"
+        type: string
+        default: "."
+      terraform-version:
+        description: "Terraform version to use"
+        type: string
+        default: "1.8.0"
+
+jobs:
+  gatekeeper:
+    name: Security Scan & Plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # Required to post PR comments
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-dir }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+
+      - name: Terraform Init
+        id: init
+        run: terraform init -backend=false
+
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt -check -diff
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
+      # Trivy IaC Scanner for Terraform
+      - name: Run Trivy vulnerability scanner in IaC mode
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          hide-progress: false
+          format: 'table'
+          exit-code: '1' # Fails the build if critical issues are found
+          severity: 'CRITICAL,HIGH'
+
+      # Fake plan for demonstration (in a real scenario, you'd need Azure credentials here)
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan > plan_output.txt
+          echo "plan_summary<<EOF" >> $GITHUB_OUTPUT
+          cat plan_output.txt
+          echo "EOF" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Post Plan to PR
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format and Style 🖌 \`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️ \`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖 \`${{ steps.validate.outcome }}\`
+            #### Terraform Plan 📖 \`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan Output</summary>
+
+            \`\`\`terraform\n
+            ${{ steps.plan.outputs.plan_summary }}
+            \`\`\`
+            
+            </details>
+
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })

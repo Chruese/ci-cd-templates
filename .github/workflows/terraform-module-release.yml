@@ -1,0 +1,43 @@
+name: Terraform Module Release
+
+on:
+  workflow_call:
+    secrets:
+      PAT_TOKEN:
+        description: "Personal Access Token with push rights to bypass branch protection if needed"
+        required: false
+
+jobs:
+  docs-and-release:
+    name: Auto-Docs & Semantic Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for committing docs and creating releases
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for semantic-release to read commit history
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Render Terraform Docs
+        uses: terraform-docs/gh-actions@v1.3.0
+        with:
+          working-dir: .
+          output-file: README.md
+          output-method: inject
+          git-push: "true"
+          git-commit-message: "docs(terraform): auto-update README.md [skip ci]"
+
+      - name: Semantic Release
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          semantic_version: 19
+          extra_plugins: |
+            @semantic-release/changelog
+            @semantic-release/git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
