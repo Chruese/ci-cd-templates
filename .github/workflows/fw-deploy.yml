@@ -1,0 +1,99 @@
+name: "Reusable - Firewall Policy Rollout (Batching)"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Zielumgebung (dev, stage, prod)"
+        required: true
+        type: string
+      tf-working-dir:
+        description: "Pfad zum Terraform-Ordner"
+        default: "terraform/azure_fw_policy"
+        type: string
+      tool-ref:
+        description: "Version/Branch von pipeline-tools"
+        default: "main"
+        type: string
+    secrets:
+      PIPELINE_TOOLS_TOKEN:
+        required: true
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+# KRITISCH FÜR AZURE FIREWALL:
+# Niemals ein laufendes Apply abbrechen (cancel-in-progress: false),
+# aber wartende Zwischen-Commits automatisch zum neuesten Stand bündeln!
+concurrency:
+  group: azure-fw-rollout-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-azure-firewall:
+    name: "Deploy Single-RCG to Azure Firewall (${{ inputs.environment }})"
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }} # Nutzt GitHub Environment Protection Rules falls gewünscht
+    timeout-minutes: 35                    # Großzügiger Puffer über dem 30m Terraform-Timeout
+    steps:
+      - name: Checkout Policy Repository (SSoT)
+        uses: actions/checkout@v4
+
+      - name: Setup fw-tool CLI
+        uses: Chruese/ci-cd-templates/.github/actions/setup-fw-tool@main
+        with:
+          git-token: ${{ secrets.PIPELINE_TOOLS_TOKEN }}
+          tool-ref: ${{ inputs.tool-ref }}
+
+      - name: Compile Consolidated RCG Artifact
+        shell: bash
+        run: |
+          set +e
+          fw-tool compile \
+            --environment "${{ inputs.environment }}" \
+            --registry config/topology_registry.yaml \
+            --policies policies \
+            --build-dir build
+          EXIT_CODE=$?
+          set -e
+
+          # Sowohl Exit 0 (Standard) als auch Exit 2 (bereits im PR durch SecOps genehmigt) sind beim Deploy erlaubt
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo "::error::Kompilierung auf main fehlgeschlagen!"
+            exit 1
+          fi
+
+      - name: Upload Compiled Audit Artifact (DORA Nachweis)
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-fw-policies-${{ inputs.environment }}-${{ github.sha }}
+          path: |
+            build/azure_${{ inputs.environment }}_rcg.json
+            build/checkpoint_${{ inputs.environment }}_payload.json
+          retention-days: 90
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+
+      - name: Terraform Init & Atomic Apply
+        working-directory: ${{ inputs.tf-working-dir }}
+        run: |
+          terraform init -input=false
+          terraform apply -input=false -auto-approve \
+            -var="compiled_json_path=${GITHUB_WORKSPACE}/build/azure_${{ inputs.environment }}_rcg.json"

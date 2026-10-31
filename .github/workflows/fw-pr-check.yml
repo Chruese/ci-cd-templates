@@ -1,0 +1,140 @@
+name: "Reusable - Firewall Policy PR Check"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Zielumgebung (dev, stage, prod)"
+        required: true
+        type: string
+      tf-working-dir:
+        description: "Pfad zum Terraform-Ordner im Policy-Repo"
+        default: "terraform/azure_fw_policy"
+        type: string
+      tool-ref:
+        description: "Version/Branch von pipeline-tools"
+        default: "main"
+        type: string
+    secrets:
+      PIPELINE_TOOLS_TOKEN:
+        required: true
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  validate-and-plan:
+    name: "Validate YAML & Terraform Plan (${{ inputs.environment }})"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Policy Repository (SSoT)
+        uses: actions/checkout@v4
+
+      - name: Setup fw-tool CLI
+        uses: Chruese/ci-cd-templates/.github/actions/setup-fw-tool@main
+        with:
+          git-token: ${{ secrets.PIPELINE_TOOLS_TOKEN }}
+          tool-ref: ${{ inputs.tool-ref }}
+
+      - name: Run fw-tool Compile & Compliance Gate
+        id: fw_compile
+        shell: bash
+        run: |
+          # Deaktiviere 'exit on error' kurzzeitig, um Exit-Code 2 sauber auszuwerten
+          set +e
+          fw-tool compile \
+            --environment "${{ inputs.environment }}" \
+            --registry config/topology_registry.yaml \
+            --policies policies \
+            --build-dir build
+          EXIT_CODE=$?
+          set -e
+
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo "::error::Harter Validierungs- oder Security-Verstoß! Siehe Log."
+            exit 1
+          elif [ "$EXIT_CODE" -eq 2 ]; then
+            echo "secops_required=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Genehmigungspflichtige Ports (z.B. HTTP/80) erkannt! SecOps-Review erforderlich."
+          else
+            echo "secops_required=false" >> "$GITHUB_OUTPUT"
+            echo "Alle Regeln entsprechen dem Standard-Change-Profil."
+          fi
+
+      - name: Set Label if SecOps Review is Required
+        if: steps.fw_compile.outputs.secops_required == 'true' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['secops-approval-required']
+            });
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+
+      - name: Terraform Init & Plan (Single RCG)
+        id: tf_plan
+        working-directory: ${{ inputs.tf-working-dir }}
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -no-color \
+            -var="compiled_json_path=${GITHUB_WORKSPACE}/build/azure_${{ inputs.environment }}_rcg.json" \
+            -out=tfplan
+        continue-on-error: false
+
+      - name: Post DORA Audit & Plan Comment to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const secops = "${{ steps.fw_compile.outputs.secops_required }}" === "true";
+            const gateBadge = secops
+              ? "⚠️ **GELB: Sonderfreigabe erforderlich (Genehmigungspflichtige Ports wie HTTP/80 enthalten)**"
+              : "✅ **GRÜN: Standard-Change (Alle Richtlinien & Namenskonventionen erfüllt)**";
+
+            const body = `### 🛡️ DORA Firewall Policy Pre-Flight & Terraform Plan (\`${{ inputs.environment }}\`)
+            
+            | Prüfpunkt | Ergebnis |
+            | :--- | :--- |
+            | **YAML-Schema & Namenskonvention** | ✅ Erfolgreich kompiliert |
+            | **Subscription- & CIDR-Zugehörigkeit** | ✅ Gegen \`topology_registry.yaml\` verifiziert |
+            | **Compliance & Security Gate** | ${gateBadge} |
+            | **Pflicht-Freigabe (4-Augen-Prinzip)** | ${secops ? "🔒 **NetOps + SecOps (@secops-approvers)**" : "👥 **NetOps / Platform Peer-Review**"} |
+
+            <details><summary>📋 Kompiliertes Azure RCG Payload anzeigen</summary>
+
+            \`\`\`json
+            ${require('fs').readFileSync('build/azure_${{ inputs.environment }}_rcg.json', 'utf8').slice(0, 3000)}
+            \`\`\`
+            </details>`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

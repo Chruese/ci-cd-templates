@@ -1,0 +1,28 @@
+name: "Setup Firewall Policy Orchestrator"
+description: "Installiert Python und das fw-tool CLI aus dem pipeline-tools Repository"
+
+inputs:
+  python-version:
+    description: "Python Version"
+    default: "3.11"
+  tool-ref:
+    description: "Branch oder Tag im pipeline-tools Repo"
+    default: "main"
+  git-token:
+    description: "PAT oder GitHub App Token mit Leserechten auf pipeline-tools"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install fw-tool from pipeline-tools
+      shell: bash
+      run: |
+        pip install --upgrade pip
+        pip install "git+https://x-access-token:${{ inputs.git-token }}@github.com/${{ github.repository_owner }}/pipeline-tools.git@${{ inputs.tool-ref }}#subdirectory=tools/firewall-policy-orchestrator"
+        fw-tool --help
